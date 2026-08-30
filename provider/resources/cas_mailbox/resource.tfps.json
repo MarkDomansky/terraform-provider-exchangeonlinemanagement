@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json.schemastore.org/tfpowershell-resource.json",
+  "version": 1,
+  "description": "Manages the client access settings of an existing Exchange Online mailbox (Get-CASMailbox / Set-CASMailbox) - which protocols the mailbox may be reached over. There is no New- or Remove-CASMailbox: this resource configures a mailbox it does not own, so destroying it leaves the settings in place unless revert_on_destroy is set.",
+  "timeout_seconds": 300,
+  "attributes": {
+    "identity": {
+      "type": "string",
+      "required": true,
+      "description": "The mailbox to configure: a UPN, primary SMTP address, alias or GUID - anything Get-CASMailbox -Identity accepts. The mailbox must already exist. Deliberately not marked requires_replace; pointing this at a different mailbox is rejected by update.ps1 instead, because a requires_replace attribute would plan a destroy on the first apply after any terraform import."
+    },
+    "revert_on_destroy": {
+      "type": "bool",
+      "optional": true,
+      "default": false,
+      "description": "On destroy, restore Exchange Online's defaults for the settings this resource manages. Off by default, so `terraform destroy` drops the resource from state and leaves the mailbox's client access settings exactly as they are - which means hardening you applied here survives. Turn it on to have destroy undo those changes. Only settings actually configured on this resource are touched; see revert_values to override the default it restores."
+    },
+    "revert_values": {
+      "type": "json",
+      "optional": true,
+      "description": "Overrides the built-in table of Exchange defaults used by revert_on_destroy, as a JSON object of Set-CASMailbox parameter names, e.g. jsonencode({ OwaMailboxPolicy = \"Contoso-Default\" }). Needed because the correct default for the policy-name settings is tenant-specific. This resource cannot snapshot the pre-existing values instead: computed attributes are not available to a destroy."
+    },
+    "activesync_enabled": {
+      "type": "bool",
+      "optional": true,
+      "description": "Allow Exchange ActiveSync (Set-CASMailbox -ActiveSyncEnabled). Exchange default: true."
+    },
+    "owa_enabled": {
+      "type": "bool",
+      "optional": true,
+      "description": "Allow Outlook on the web (Set-CASMailbox -OWAEnabled). Exchange default: true."
+    },
+    "owa_for_devices_enabled": {
+      "type": "bool",
+      "optional": true,
+      "description": "Allow the Outlook on the web mobile apps (Set-CASMailbox -OWAforDevicesEnabled). Exchange default: true."
+    },
+    "pop_enabled": {
+      "type": "bool",
+      "optional": true,
+      "description": "Allow POP3 (Set-CASMailbox -PopEnabled). Exchange default: true."
+    },
+    "imap_enabled": {
+      "type": "bool",
+      "optional": true,
+      "description": "Allow IMAP4 (Set-CASMailbox -ImapEnabled). Exchange default: true."
+    },
+    "mapi_enabled": {
+      "type": "bool",
+      "optional": true,
+      "description": "Allow MAPI, which is how the Outlook desktop client connects (Set-CASMailbox -MAPIEnabled). Exchange default: true."
+    },
+    "ews_enabled": {
+      "type": "bool",
+      "optional": true,
+      "description": "Allow Exchange Web Services (Set-CASMailbox -EwsEnabled). When unset on the mailbox, Exchange falls back to the organisation-level setting."
+    },
+    "pop_use_protocol_defaults": {
+      "type": "bool",
+      "optional": true,
+      "description": "Use the organisation's POP3 protocol defaults for this mailbox (Set-CASMailbox -PopUseProtocolDefaults). Exchange default: true."
+    },
+    "imap_use_protocol_defaults": {
+      "type": "bool",
+      "optional": true,
+      "description": "Use the organisation's IMAP4 protocol defaults for this mailbox (Set-CASMailbox -ImapUseProtocolDefaults). Exchange default: true."
+    },
+    "smtp_client_authentication_disabled": {
+      "type": "bool",
+      "optional": true,
+      "description": "Disable authenticated SMTP (SMTP AUTH) for this mailbox (Set-CASMailbox -SmtpClientAuthenticationDisabled). Leave unset on the mailbox to inherit the tenant-wide setting from Set-TransportConfig; that inherited state is what revert_on_destroy restores."
+    },
+    "activesync_mailbox_policy": {
+      "type": "string",
+      "optional": true,
+      "description": "Name of the mobile device mailbox policy to apply (Set-CASMailbox -ActiveSyncMailboxPolicy). The policy must already exist."
+    },
+    "owa_mailbox_policy": {
+      "type": "string",
+      "optional": true,
+      "description": "Name of the Outlook on the web mailbox policy to apply (Set-CASMailbox -OwaMailboxPolicy). The policy must already exist."
+    },
+    "activesync_allowed_device_ids": {
+      "type": "set",
+      "element_type": "string",
+      "optional": true,
+      "description": "Device IDs allowed to sync with this mailbox (Set-CASMailbox -ActiveSyncAllowedDeviceIDs). Authoritative: the list replaces whatever is configured."
+    },
+    "activesync_blocked_device_ids": {
+      "type": "set",
+      "element_type": "string",
+      "optional": true,
+      "description": "Device IDs blocked from syncing with this mailbox (Set-CASMailbox -ActiveSyncBlockedDeviceIDs). Authoritative: the list replaces whatever is configured."
+    },
+    "ews_allow_outlook": {
+      "type": "bool",
+      "optional": true,
+      "description": "Allow Outlook to use EWS against this mailbox (Set-CASMailbox -EwsAllowOutlook)."
+    },
+    "ews_allow_mac_outlook": {
+      "type": "bool",
+      "optional": true,
+      "description": "Allow Outlook for Mac to use EWS against this mailbox (Set-CASMailbox -EwsAllowMacOutlook)."
+    },
+    "ews_application_access_policy": {
+      "type": "string",
+      "optional": true,
+      "validators": [
+        { "one_of": ["EnforceAllowList", "EnforceBlockList"] }
+      ],
+      "description": "Whether ews_allow_list or ews_block_list governs EWS application access (Set-CASMailbox -EwsApplicationAccessPolicy)."
+    },
+    "ews_allow_list": {
+      "type": "set",
+      "element_type": "string",
+      "optional": true,
+      "description": "EWS user-agent strings permitted when ews_application_access_policy is EnforceAllowList (Set-CASMailbox -EwsAllowList)."
+    },
+    "ews_block_list": {
+      "type": "set",
+      "element_type": "string",
+      "optional": true,
+      "description": "EWS user-agent strings denied when ews_application_access_policy is EnforceBlockList (Set-CASMailbox -EwsBlockList)."
+    },
+    "additional_parameters": {
+      "type": "json",
+      "optional": true,
+      "description": "Escape hatch: a JSON object of extra Set-CASMailbox parameters, splatted onto the cmdlet after every attribute above and winning over them, e.g. jsonencode({ ShowGalAsDefaultView = false }). Terraform cannot validate these, they are not reflected in any computed attribute, and revert_on_destroy does not undo them."
+    },
+    "external_directory_object_id": {
+      "type": "string",
+      "computed": true,
+      "description": "The mailbox's Entra ID object ID."
+    },
+    "effective_primary_smtp_address": {
+      "type": "string",
+      "computed": true,
+      "description": "Primary SMTP address of the mailbox this resource configures. Useful for confirming identity resolved to what you expected."
+    },
+    "effective_display_name": {
+      "type": "string",
+      "computed": true,
+      "description": "Display name of the mailbox this resource configures."
+    },
+    "effective_activesync_enabled": {
+      "type": "bool",
+      "computed": true,
+      "description": "ActiveSync state as Exchange currently reports it. Config attributes are never refreshed, so these mirrors are how drift becomes visible."
+    },
+    "effective_owa_enabled": {
+      "type": "bool",
+      "computed": true,
+      "description": "Outlook on the web state as Exchange currently reports it."
+    },
+    "effective_pop_enabled": {
+      "type": "bool",
+      "computed": true,
+      "description": "POP3 state as Exchange currently reports it."
+    },
+    "effective_imap_enabled": {
+      "type": "bool",
+      "computed": true,
+      "description": "IMAP4 state as Exchange currently reports it."
+    },
+    "effective_mapi_enabled": {
+      "type": "bool",
+      "computed": true,
+      "description": "MAPI state as Exchange currently reports it."
+    },
+    "effective_ews_enabled": {
+      "type": "bool",
+      "computed": true,
+      "description": "EWS state as Exchange currently reports it; null when the mailbox inherits the organisation setting."
+    },
+    "effective_smtp_client_authentication_disabled": {
+      "type": "bool",
+      "computed": true,
+      "description": "SMTP AUTH state as Exchange currently reports it; null when the mailbox inherits the tenant-wide setting."
+    },
+    "effective_activesync_mailbox_policy": {
+      "type": "string",
+      "computed": true,
+      "description": "Mobile device mailbox policy currently applied."
+    },
+    "effective_owa_mailbox_policy": {
+      "type": "string",
+      "computed": true,
+      "description": "Outlook on the web mailbox policy currently applied."
+    },
+    "effective_activesync_blocked_device_ids": {
+      "type": "set",
+      "element_type": "string",
+      "computed": true,
+      "description": "Device IDs Exchange currently blocks from syncing with this mailbox."
+    },
+    "effective_activesync_allowed_device_ids": {
+      "type": "set",
+      "element_type": "string",
+      "computed": true,
+      "description": "Device IDs Exchange currently allows to sync with this mailbox."
+    }
+  }
+}

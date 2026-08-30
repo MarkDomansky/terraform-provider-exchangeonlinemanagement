@@ -1,0 +1,41 @@
+// Copy this file to terraform.tfvars and fill in your tenant's values.
+//
+//     cp terraform.tfvars.example terraform.tfvars
+//
+// terraform.tfvars is gitignored (*.tfvars) so your values stay out of the
+// repository. This .example file is not, so keep placeholders in it.
+//
+// Prefer the environment for the secret: every variable here maps to a
+// provider attribute with an EXO_* fallback, so you can leave
+// certificate_password out entirely and export EXO_CERTIFICATE_PASSWORD
+// instead.
+
+// The tenant's primary .onmicrosoft.com domain.
+organization = "contoso.onmicrosoft.com"
+
+// Application (client) ID of the Entra app registration.
+// See docs/guides/app-registration.md.
+app_id = "36ee4c6c-0812-40a2-b820-b22ebd02bce3"
+
+// ---------------------------------------------------------------------------
+// Authentication: set EXACTLY ONE of the two blocks below.
+// The provider rejects both being configured.
+// ---------------------------------------------------------------------------
+
+// Option 1 - certificate in the Windows certificate store. WINDOWS ONLY.
+// It must be in the store of the account that runs terraform, so an unattended
+// agent will not see a certificate you created interactively as yourself.
+certificate_thumbprint = "83213AEAC56D61C97AEE5C1528F4AC5EBA7321C1"
+
+// Option 2 - PFX file. Works on every platform, and the only option on Linux
+// and macOS. The path is resolved on the machine running terraform.
+# certificate_path     = "/etc/terraform/exo.pfx"
+# certificate_password = "..." # better: export EXO_CERTIFICATE_PASSWORD
+
+// ---------------------------------------------------------------------------
+// What the example creates. Both have defaults; override to avoid colliding
+// with an existing mailbox in your tenant.
+// ---------------------------------------------------------------------------
+
+# mailbox_name = "terraform-sales"
+# display_name = "Sales Team"

@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json.schemastore.org/tfpowershell-datasource.json",
+  "version": 1,
+  "description": "Looks up an Exchange Online mailbox by user principal name, Entra object ID, or email address, and returns its details. Set exactly one of the three lookup attributes.",
+  "timeout_seconds": 300,
+  "attributes": {
+    "user_principal_name": {
+      "type": "string",
+      "optional": true,
+      "description": "Look the mailbox up by user principal name, e.g. sales@contoso.com. Set exactly one of user_principal_name, object_id or email_address."
+    },
+    "object_id": {
+      "type": "string",
+      "optional": true,
+      "description": "Look the mailbox up by its Entra ID object ID (the mailbox's ExternalDirectoryObjectId). Set exactly one of user_principal_name, object_id or email_address."
+    },
+    "email_address": {
+      "type": "string",
+      "optional": true,
+      "description": "Look the mailbox up by any of its SMTP addresses, primary or secondary. Set exactly one of user_principal_name, object_id or email_address."
+    },
+    "found": {
+      "type": "bool",
+      "computed": true,
+      "description": "Whether a mailbox matched. A data source that finds nothing is not an error - check this before using any other attribute, because they are all null when it is false."
+    },
+    "mailbox_guid": {
+      "type": "string",
+      "computed": true,
+      "description": "The mailbox's Exchange directory GUID. This is the value exchangeonlinemanagement_mailbox uses as its Terraform id, so it is what you pass to terraform import."
+    },
+    "exchange_guid": {
+      "type": "string",
+      "computed": true,
+      "description": "The mailbox's Exchange GUID."
+    },
+    "external_directory_object_id": {
+      "type": "string",
+      "computed": true,
+      "description": "The mailbox's Entra ID object ID - the same value the object_id lookup attribute takes."
+    },
+    "effective_user_principal_name": {
+      "type": "string",
+      "computed": true,
+      "description": "The mailbox's user principal name. Named effective_ because user_principal_name is a lookup attribute and one attribute cannot be both."
+    },
+    "primary_smtp_address": {
+      "type": "string",
+      "computed": true,
+      "description": "The mailbox's primary SMTP address."
+    },
+    "email_addresses": {
+      "type": "set",
+      "element_type": "string",
+      "computed": true,
+      "description": "Every proxy address on the mailbox, prefix included (SMTP:, smtp:, SIP:, SPO:)."
+    },
+    "name": {
+      "type": "string",
+      "computed": true,
+      "description": "The mailbox name."
+    },
+    "display_name": {
+      "type": "string",
+      "computed": true,
+      "description": "The mailbox display name."
+    },
+    "alias": {
+      "type": "string",
+      "computed": true,
+      "description": "The mailbox alias."
+    },
+    "recipient_type": {
+      "type": "string",
+      "computed": true,
+      "description": "Exchange's broad classification, e.g. UserMailbox."
+    },
+    "recipient_type_details": {
+      "type": "string",
+      "computed": true,
+      "description": "Exchange's specific classification: SharedMailbox, UserMailbox, RoomMailbox, EquipmentMailbox and so on."
+    },
+    "hidden_from_address_lists": {
+      "type": "bool",
+      "computed": true,
+      "description": "Whether the mailbox is hidden from address lists."
+    },
+    "litigation_hold_enabled": {
+      "type": "bool",
+      "computed": true,
+      "description": "Whether the mailbox is on litigation hold."
+    },
+    "is_directory_synced": {
+      "type": "bool",
+      "computed": true,
+      "description": "Whether the underlying object is synchronised from on-premises Active Directory."
+    },
+    "deliver_to_mailbox_and_forward": {
+      "type": "bool",
+      "computed": true,
+      "description": "Whether forwarded mail is also kept in the mailbox."
+    },
+    "forwarding_smtp_address": {
+      "type": "string",
+      "computed": true,
+      "description": "The external forwarding address, if one is set."
+    },
+    "retention_policy": {
+      "type": "string",
+      "computed": true,
+      "description": "The retention policy applied to the mailbox."
+    },
+    "issue_warning_quota": {
+      "type": "string",
+      "computed": true,
+      "description": "Quota at which the user is warned, as Exchange reports it."
+    },
+    "prohibit_send_quota": {
+      "type": "string",
+      "computed": true,
+      "description": "Quota at which the mailbox can no longer send."
+    },
+    "prohibit_send_receive_quota": {
+      "type": "string",
+      "computed": true,
+      "description": "Quota at which the mailbox can no longer send or receive."
+    },
+    "max_send_size": {
+      "type": "string",
+      "computed": true,
+      "description": "Largest message the mailbox may send."
+    },
+    "max_receive_size": {
+      "type": "string",
+      "computed": true,
+      "description": "Largest message the mailbox may receive."
+    },
+    "custom_attributes": {
+      "type": "map",
+      "element_type": "string",
+      "computed": true,
+      "description": "Exchange custom attributes 1 through 15, keyed \"1\" .. \"15\". Attributes with no value are omitted."
+    },
+    "when_created": {
+      "type": "string",
+      "computed": true,
+      "description": "Creation time in UTC, ISO 8601."
+    },
+    "mailbox_json": {
+      "type": "json",
+      "computed": true,
+      "description": "The whole Get-Mailbox object as JSON, for the many properties this data source does not model explicitly. Read it with jsondecode(). Values are normalised for stable state: dates are ISO 8601 strings, multi-valued properties are string arrays, and everything else is stringified."
+    }
+  }
+}
