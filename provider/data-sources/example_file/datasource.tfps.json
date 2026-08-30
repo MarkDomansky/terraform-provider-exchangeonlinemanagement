@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/tfpowershell-datasource.json",
+  "version": 1,
+  "description": "Reads a text file on the machine running the provider. This is the template's sample data source - delete the folder before publishing.",
+  "attributes": {
+    "path": {
+      "type": "string",
+      "required": true,
+      "description": "Path of the file to read. Relative paths resolve against the provider's default_directory."
+    },
+    "exists": {
+      "type": "bool",
+      "computed": true,
+      "description": "Whether the file exists."
+    },
+    "content": {
+      "type": "string",
+      "computed": true,
+      "description": "The file's content; null when the file does not exist."
+    },
+    "size": {
+      "type": "int",
+      "computed": true,
+      "description": "Size in bytes; null when the file does not exist."
+    }
+  }
+}

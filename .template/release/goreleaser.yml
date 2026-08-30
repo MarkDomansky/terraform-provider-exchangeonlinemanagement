@@ -1,0 +1,80 @@
+# MANAGED FILE - do not edit in your fork.
+version: 2
+
+# project_name cannot use templates, so it stays a placeholder. Every artifact
+# name is instead driven by the PROVIDER_NAME environment variable, which the
+# release workflow exports from provider/settings.tfps.json - that is what lets this
+# file stay byte-identical across every fork. The Terraform Registry only
+# cares about the archive/binary/manifest names, which all carry the real name.
+project_name: template-provider
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - '-s -w -X main.version={{.Version}}'
+    goos:
+      - windows
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    binary: 'terraform-provider-{{ .Env.PROVIDER_NAME }}_v{{ .Version }}'
+
+archives:
+  - format: zip
+    name_template: 'terraform-provider-{{ .Env.PROVIDER_NAME }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    files:
+      # The pshost sidecars staged by .template/build/Get-EngineSidecars.ps1 (downloaded
+      # from the engine release matching go.mod). Each zip carries its own copy.
+      - src: 'dist-pshost/{{ .Os }}-{{ .Arch }}/pshost{{ if eq .Os "windows" }}.exe{{ end }}'
+        dst: .
+        strip_parent: true
+
+# The Terraform Registry requires the manifest (with its protocol declaration)
+# published alongside the archives under this exact name.
+release:
+  draft: false
+  extra_files:
+    - glob: '.template/release/terraform-registry-manifest.json'
+      name_template: 'terraform-provider-{{ .Env.PROVIDER_NAME }}_{{ .Version }}_manifest.json'
+
+checksum:
+  # The manifest must have a line in SHA256SUMS, not just be uploaded next to
+  # it: the Terraform Registry refuses a version with "missing SHA256 checksum
+  # for ..._manifest.json". release.extra_files above only covers the upload,
+  # and this pipeline skips GoReleaser's publish step anyway, so without this
+  # block the manifest is never checksummed. The name_template must match the
+  # one used for the upload, or the checksum line names a file nobody ships.
+  extra_files:
+    - glob: '.template/release/terraform-registry-manifest.json'
+      name_template: 'terraform-provider-{{ .Env.PROVIDER_NAME }}_{{ .Version }}_manifest.json'
+  name_template: 'terraform-provider-{{ .Env.PROVIDER_NAME }}_{{ .Version }}_SHA256SUMS'
+  algorithm: sha256
+
+signs:
+  - artifacts: checksum
+    args:
+      - "--batch"
+      - "--local-user"
+      - "{{ .Env.GPG_FINGERPRINT }}"
+      - "--output"
+      - "${signature}"
+      - "--detach-sign"
+      - "${artifact}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'

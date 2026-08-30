@@ -1,0 +1,105 @@
+# MANAGED FILE - do not edit in your fork.
+name: Tests
+# Skipped for docs- and examples-only changes: nothing in them affects the
+# build or the suites. provider/** and tests/** are deliberately NOT ignored -
+# changes to scripts, manifests, and tests are exactly what this validates.
+on:
+  push:
+    branches: [main, beta]
+    paths-ignore:
+      - 'docs/**'
+      - 'examples/**'
+      - '**/*.md'
+      - 'LICENSE'
+      - '.github/workflows/wiki-sync.yml'
+      - '.template/scripts/Sync-DocsToWiki.ps1'
+  pull_request:
+    # In a fork, `beta` is the day-to-day target: work lands as squash-merged
+    # PRs into it, and `main` only ever receives the beta -> main GA merge.
+    # The template repo has no `beta` of its own - it publishes nothing, so
+    # there is no prerelease channel to stage; its PRs target `main` directly,
+    # since `main` is the ref forks sync from. Keep `beta` listed either way:
+    # this file is copied verbatim into forks, where it is the release line.
+    branches: [main, beta]
+    # Keep in sync with the push filter above (Actions has no YAML anchors).
+    paths-ignore:
+      - 'docs/**'
+      - 'examples/**'
+      - '**/*.md'
+      - 'LICENSE'
+      - '.github/workflows/wiki-sync.yml'
+      - '.template/scripts/Sync-DocsToWiki.ps1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # go test ./... runs the managed TestProviderDefinitionLoads, which parses
+  # every manifest and checks every required script exists - a manifest
+  # typo fails here with the engine's pointed error message.
+  build:
+    name: Build and Validate Definitions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Resolve engine version
+        shell: pwsh
+        run: ./.template/build/Update-Engine.ps1
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./... -v -timeout 120s
+
+  # Script-level unit tests: no Go, no terraform, no sidecar - just Pester
+  # running provider/**/tests/*.Tests.ps1 with mocked cmdlets.
+  unit:
+    name: Unit (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run script unit tests
+        shell: pwsh
+        run: |
+          Install-Module Pester -Force -SkipPublisherCheck -MinimumVersion 5.0
+          ./.template/tests/unit/Invoke-UnitTests.ps1 -CI
+
+  # Real terraform against the compiled provider + downloaded sidecar. Suites
+  # that need a live target system must gate on Get-E2ETestConfig and skip
+  # cleanly here; the example_file sample runs everywhere.
+  e2e:
+    name: E2E (${{ matrix.os }})
+    needs: [build]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - name: Build provider (resolves engine + downloads sidecar)
+        shell: pwsh
+        run: ./.template/build/Build-Provider.ps1
+      - name: Run E2E suite
+        shell: pwsh
+        run: |
+          Install-Module Pester -Force -SkipPublisherCheck -MinimumVersion 5.0
+          $cfg = New-PesterConfiguration
+          $cfg.Run.Path = 'tests/e2e'
+          $cfg.Run.Exit = $true
+          $cfg.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $cfg

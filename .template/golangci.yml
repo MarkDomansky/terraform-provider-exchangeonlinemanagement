@@ -1,0 +1,18 @@
+# MANAGED FILE - do not edit in your fork.
+# Local-only lint config; CI does not run golangci-lint.
+# Run: golangci-lint run -c .template/golangci.yml
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+
+formatters:
+  enable:
+    - gofmt

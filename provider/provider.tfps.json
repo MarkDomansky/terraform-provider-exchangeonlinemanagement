@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/tfpowershell-provider.json",
+  "version": 1,
+  "description": "Example provider built from the PowerShell provider template. Replace this description with what your provider manages.",
+  "attributes": {
+    "default_directory": {
+      "type": "string",
+      "optional": true,
+      "env": "YOURPROVIDER_DEFAULT_DIRECTORY",
+      "description": "Directory used by the example_file resource when a relative path is given. Scripts read it as $global:ProviderData.Config.default_directory. Delete this attribute along with the sample resources and declare your own (tenant, api_url, client_id, ...)."
+    }
+  }
+}

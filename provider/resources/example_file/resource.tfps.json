@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json.schemastore.org/tfpowershell-resource.json",
+  "version": 1,
+  "description": "Manages a text file on the machine running the provider. This is the template's sample resource - study it, copy the pattern, then delete the folder before publishing.",
+  "attributes": {
+    "path": {
+      "type": "string",
+      "required": true,
+      "requires_replace": true,
+      "description": "Path of the file to manage. Relative paths resolve against the provider's default_directory. Changing it replaces the file (requires_replace)."
+    },
+    "content": {
+      "type": "string",
+      "optional": true,
+      "default": "",
+      "description": "Content written to the file. Changing it runs update.ps1 in place."
+    },
+    "size": {
+      "type": "int",
+      "computed": true,
+      "description": "Size of the file in bytes, refreshed by read.ps1."
+    },
+    "last_modified": {
+      "type": "string",
+      "computed": true,
+      "description": "Last write time (UTC, ISO 8601), refreshed by read.ps1."
+    }
+  }
+}

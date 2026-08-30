@@ -1,0 +1,229 @@
+# MANAGED FILE - do not edit in your fork.
+#
+# Template sync for repos created from this template - including "Use this
+# template" copies with no shared git history. Two modes:
+#
+# - MONTHLY CHECK (schedule, 1st of the month): compares the managed FILE
+#   SET (.template/**, .github/workflows/**, the marked root files) against
+#   the template. If anything differs, it opens - or updates - a
+#   "Template updates available" issue with the pending changes and
+#   instructions. It never pushes or opens a PR on its own.
+# - MANUAL SYNC (workflow_dispatch): copies the managed file set onto a
+#   fixed `template-sync` branch and opens a PR into `beta` (or the default
+#   branch when no `beta` exists). The branch is force-pushed each run, so
+#   an unmerged sync PR is replaced/amended in place rather than
+#   duplicated. Opening the PR closes the tracking issue.
+#
+# Setup notes for copies:
+# - Repo Settings -> Actions -> General -> "Allow GitHub Actions to create
+#   and approve pull requests" must be enabled.
+# - The default GITHUB_TOKEN cannot push workflow-file changes, and PRs it
+#   creates do not trigger CI. Add a TEMPLATE_SYNC_TOKEN secret (PAT with
+#   contents + workflows + pull-requests write on this repo) to sync
+#   .github/workflows/** and get CI runs on sync PRs. Without it, workflow
+#   drift is only reported in the PR body for you to apply by hand, and
+#   sync PRs show no checks - close and reopen the PR (a user-identity
+#   event) to trigger CI on it.
+# - Merge sync PRs with a squash into `beta`, like any other PR.
+#
+# TO DISABLE: delete this file, or disable the workflow in the repo's
+# Actions tab (Actions -> Template Sync -> "..." -> Disable workflow).
+name: Template Sync
+on:
+  schedule:
+    - cron: '23 6 1 * *' # monthly check on the 1st - issue only, never a PR
+  workflow_dispatch: # the actual sync - branch + PR
+    inputs:
+      source_ref:
+        description: Template ref to sync from
+        default: main
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+env:
+  TEMPLATE_REPO: MarkDomansky/TEMPLATE-terraform-provider-YOURPROVIDER
+
+jobs:
+  sync:
+    name: ${{ github.event_name == 'schedule' && 'Check for template updates' || 'Sync managed files from template' }}
+    runs-on: ubuntu-latest
+    # Never sync the template onto itself.
+    if: github.repository != 'MarkDomansky/TEMPLATE-terraform-provider-YOURPROVIDER'
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+        with:
+          path: copy
+          fetch-depth: 0
+          token: ${{ secrets.TEMPLATE_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Checkout template
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TEMPLATE_REPO }}
+          ref: ${{ inputs.source_ref || 'main' }}
+          path: template
+          # Full history, so the issue/PR body can list template commits
+          # since the previous sync.
+          fetch-depth: 0
+
+      - name: Check for updates / sync
+        shell: pwsh
+        working-directory: copy
+        env:
+          GH_TOKEN: ${{ secrets.TEMPLATE_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
+          HAS_PAT: ${{ secrets.TEMPLATE_SYNC_TOKEN != '' }}
+          MODE: ${{ github.event_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+          # Sync PRs target beta (the day-to-day line) when it exists.
+          $target = if (git ls-remote --heads origin beta) { 'beta' }
+                    else { '${{ github.event.repository.default_branch }}' }
+          git switch $target
+
+          $templateSha = (git -C ../template rev-parse --short HEAD).Trim()
+          $checkOnly = $env:MODE -eq 'schedule'
+          # The monthly check compares everything, workflows included; only
+          # a PUSH of workflow files needs the PAT.
+          $inc = $checkOnly -or ($env:HAS_PAT -eq 'true')
+
+          # Template commits since the last merged sync, recovered from the
+          # @sha marker that every sync squash subject carries.
+          $prevSha = $null
+          $marker = [string](git log --grep 'sync managed files from template @' -1 --format=%s)
+          if ($marker -match '@([0-9a-f]{7,40})') { $prevSha = $Matches[1] }
+          $history = "_(first sync - no previous sync marker found on ``$target``)_"
+          if ($prevSha) {
+            git -C ../template cat-file -e "$prevSha^{commit}" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+              $count = [int](git -C ../template rev-list --count --no-merges "$prevSha..HEAD")
+              if ($count -eq 0) {
+                $history = '_(no new template commits - this sync restores locally drifted managed files)_'
+              }
+              else {
+                $subjects = @(git -C ../template log --no-merges --format='- %s (%h)' "$prevSha..HEAD" | Select-Object -First 50)
+                $history = $subjects -join "`n"
+                if ($count -gt 50) { $history += "`n- ...and $($count - 50) more" }
+              }
+            }
+            else {
+              $history = "_(previous sync marker ``$prevSha`` not found in template history)_"
+            }
+          }
+
+          if (-not $checkOnly) { git switch -c template-sync }
+
+          # Always the TEMPLATE's copy of the sync logic, never the local one.
+          $out = & ../template/.template/scripts/Sync-FromTemplate.ps1 `
+              -TemplateRoot ../template -IncludeWorkflows:$inc *>&1 | Out-String
+          Write-Host $out
+
+          $changed = (git diff --cached --name-status | Out-String).Trim()
+
+          $issueTitle = 'Template updates available'
+          $existingIssue = gh issue list --state open --search "`"$issueTitle`" in:title" `
+              --json number,title --jq ".[] | select(.title == `"$issueTitle`") | .number" | Select-Object -First 1
+          $existingPr = gh pr list --head template-sync --base $target --state open `
+              --json number --jq '.[].number' | Select-Object -First 1
+
+          # ------------------------- monthly check -------------------------
+          if ($checkOnly) {
+            if (-not $changed) {
+              Write-Host '::notice::Managed files already match the template.'
+              if ($existingIssue) {
+                gh issue close $existingIssue --comment "The monthly check found no remaining differences against ``${{ env.TEMPLATE_REPO }}`` @ ``$templateSha``."
+              }
+              return
+            }
+            $issueBody = @"
+          The monthly check found template updates that this repo does not have
+          (``${{ env.TEMPLATE_REPO }}`` @ ``$templateSha``). No changes have been made -
+          run the sync manually to get them as a reviewable PR.
+
+          #### How to apply
+          Run the **Template Sync** workflow manually - it force-pushes a ``template-sync``
+          branch and opens (or refreshes) a PR into ``$target``:
+
+          - GitHub UI: **Actions -> Template Sync -> Run workflow** (keep the default branch selected)
+          - CLI: ``gh workflow run 'Template Sync'``
+
+          This issue is updated by each monthly check and closed automatically when
+          the sync PR is opened or the check finds no remaining differences.
+
+          #### Template commits since the last sync
+          $history
+
+          #### Files that would change
+          ``````
+          $changed
+          ``````
+          "@
+            if ($existingIssue) {
+              gh issue edit $existingIssue --body $issueBody
+              gh issue comment $existingIssue --body "Refreshed by the monthly check: template is now at ``$templateSha``."
+              Write-Host "::notice::Updated tracking issue #$existingIssue."
+            }
+            else {
+              gh issue create --title $issueTitle --body $issueBody
+            }
+            return
+          }
+
+          # ------------------------- manual sync ---------------------------
+          if (-not $changed) {
+            Write-Host '::notice::Managed files already match the template.'
+            if ($existingPr) {
+              gh pr close $existingPr --comment 'Superseded: the managed files now match the template.' --delete-branch
+            }
+            if ($existingIssue) {
+              gh issue close $existingIssue --comment "Manual sync found no remaining differences against ``${{ env.TEMPLATE_REPO }}`` @ ``$templateSha``."
+            }
+            return
+          }
+
+          git commit -q -m "chore: sync managed files from template @$templateSha"
+          git push -f origin template-sync
+
+          $wfNote = ''
+          if ($out -match 'workflow-drift: (.+)') {
+            $wfNote = "`n> [!WARNING]`n> Workflow files changed in the template but cannot be pushed with the default token: **$($Matches[1].Trim())**. Copy them from the template by hand, or add a ``TEMPLATE_SYNC_TOKEN`` secret (PAT with contents + workflows + pull-requests write) so future syncs include them.`n"
+          }
+          $ciNote = ''
+          if ($env:HAS_PAT -ne 'true') {
+            $ciNote = "`n> [!NOTE]`n> No CI checks run on this PR automatically (GitHub ignores events created with the default ``GITHUB_TOKEN``). **Close and reopen this PR** to trigger them - required status checks stay pending until you do. Merging always triggers CI on ``$target`` normally. A ``TEMPLATE_SYNC_TOKEN`` secret makes future sync PRs trigger CI on their own.`n"
+          }
+          $title = "chore: sync managed files from template @$templateSha"
+          $body = @"
+          Sync of the managed file set from
+          ``${{ env.TEMPLATE_REPO }}`` @ ``$templateSha`` (ref ``${{ inputs.source_ref || 'main' }}``).
+          $wfNote$ciNote
+          #### Template commits since the last sync
+          $history
+
+          #### Files changed
+          ``````
+          $changed
+          ``````
+
+          Squash-merge into ``$target`` like any other PR. If left unmerged, the next
+          manual sync force-pushes this branch with a fresh sync (this PR is
+          replaced, never duplicated).
+          "@
+
+          if ($existingPr) {
+            gh pr edit $existingPr --title $title --body $body
+            $prUrl = gh pr view $existingPr --json url --jq .url
+            Write-Host "::notice::Updated existing sync PR #$existingPr."
+          }
+          else {
+            $prUrl = gh pr create --base $target --head template-sync --title $title --body $body
+          }
+          if ($existingIssue) {
+            gh issue close $existingIssue --comment "Sync PR opened: $prUrl"
+          }

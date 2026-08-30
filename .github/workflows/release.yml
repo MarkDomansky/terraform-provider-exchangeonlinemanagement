@@ -1,0 +1,300 @@
+# MANAGED FILE - do not edit in your fork.
+name: Release
+# Version -> package -> smoke -> publish. semantic-release decides the next
+# version from the commits on the pushed branch. GoReleaser packages the
+# artifacts (with pshost sidecars downloaded from the engine release pinned by
+# go.mod) without publishing, an install smoke test proves each zip serves the
+# provider's typed schemas, and only then does semantic-release create the tag
+# and the GitHub release.
+#
+# The CHANNEL comes from the branch that was pushed, per .releaserc.cjs:
+#
+#   beta -> x.y.z-beta.N   (prerelease; every squash-merged PR lands here)
+#   main -> x.y.z          (GA, from merging beta into main)
+#
+# Merge beta into main with a real merge commit, never a squash - the analyzer
+# needs the individual conventional commits to pick the GA bump.
+# Only `main` ever syncs the wiki - see wiki-sync.yml.
+#
+# IN THE TEMPLATE REPO ITSELF this pipeline builds and smoke-tests but never
+# publishes - see the guard on the `publish` job. The template ships no
+# installable provider (its name is the `yourprovider` placeholder) and forks
+# consume it as a file copy from a ref, not as a versioned artifact.
+on:
+  push:
+    branches:
+      # Both lines ship to forks. The template repo has no `beta` branch of its
+      # own - managed-file changes land as PRs into `main`, which is the ref
+      # template-sync.yml copies from - so that entry is inert there.
+      - main
+      - beta
+    # Docs, examples and the test suites do not ship in the provider binary,
+    # so a push that only touches them cuts no release. provider/** DOES ship
+    # (it is embedded in the binary) and is not ignored.
+    paths-ignore:
+      - 'docs/**'
+      - 'examples/**'
+      - 'tests/**'
+      - '.template/tests/**'
+      - '**/*.md'
+      - 'LICENSE'
+      - '.github/workflows/wiki-sync.yml'
+      - '.template/scripts/Sync-DocsToWiki.ps1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+# semantic-release refuses to run when the local branch is behind the remote,
+# so releases on the SAME branch must not overlap. Different branches are
+# independent release lines (beta vs main) and may run concurrently.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Determine Version
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.semantic.outputs.new_release_published }}
+      # Bare semver, e.g. 0.2.0-beta.1 or 0.2.0 (no leading v) - matches the
+      # string GoReleaser stamps into archive names.
+      version: ${{ steps.semantic.outputs.new_release_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: semantic-release (dry run)
+        id: semantic
+        uses: cycjimmy/semantic-release-action@v4
+        with:
+          semantic_version: 24
+          dry_run: true
+          # Required by `preset: conventionalcommits` in .releaserc.cjs. Keep
+          # in sync with the publish job.
+          extra_plugins: |
+            conventional-changelog-conventionalcommits@8
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Report decision
+        run: |
+          if [ "${{ steps.semantic.outputs.new_release_published }}" = "true" ]; then
+            echo "::notice::Next release: v${{ steps.semantic.outputs.new_release_version }}"
+          else
+            echo "::notice::No release warranted for these commits - skipping build."
+          fi
+
+  package:
+    name: Package Release Artifacts
+    needs: version
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Export provider name from settings.tfps.json
+        run: echo "PROVIDER_NAME=$(jq -r .name provider/settings.tfps.json)" >> "$GITHUB_ENV"
+      - name: Resolve engine version
+        shell: pwsh
+        run: ./.template/build/Update-Engine.ps1
+      - name: Download pshost sidecars from the engine release
+        shell: pwsh
+        run: ./.template/build/Get-EngineSidecars.ps1
+      # GoReleaser derives {{ .Version }} from the current tag. The real tag is
+      # not created until the smoke test is green, so stamp a local-only tag
+      # with the version semantic-release just computed. It is never pushed.
+      - name: Stage local tag for GoReleaser
+        run: git tag -f "v${{ needs.version.outputs.version }}"
+      # Sign checksums only when the GPG secrets are configured; a GitHub-only
+      # release does not require signatures (the Terraform Registry DOES - see
+      # SETUP.md), so their absence must not block CI.
+      - name: Check for GPG signing key
+        id: gpg_check
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [ -n "$GPG_PRIVATE_KEY" ]; then
+            echo "have_key=true" >> "$GITHUB_OUTPUT"
+            echo "skips=publish,announce" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_key=false" >> "$GITHUB_OUTPUT"
+            echo "skips=publish,announce,sign" >> "$GITHUB_OUTPUT"
+            echo "::notice::GPG_PRIVATE_KEY secret not set - checksums will not be signed."
+          fi
+      - name: Import GPG key
+        if: steps.gpg_check.outputs.have_key == 'true'
+        uses: crazy-max/ghaction-import-gpg@v6
+        id: import_gpg
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          # Without this the key imports LOCKED and gpg tries to prompt on a
+          # runner that has no TTY. GPG_PASSPHRASE must be set with the key.
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+      - name: Run GoReleaser (build + archive + sign, no publish)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          # Keep the skip list a plain string output (see the engine's
+          # release.yml for why inline `cond && A || B` silently broke signing).
+          args: release --clean --config .template/release/goreleaser.yml --skip=${{ steps.gpg_check.outputs.skips }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}
+          GORELEASER_CURRENT_TAG: v${{ needs.version.outputs.version }}
+          PROVIDER_NAME: ${{ env.PROVIDER_NAME }}
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dist
+          path: |
+            dist/*.zip
+            dist/*_SHA256SUMS
+            dist/*_SHA256SUMS.sig
+          retention-days: 7
+
+  # Prove each zip is installable and serves the typed schemas: a real
+  # `terraform init` from a filesystem mirror holding the release zip, then
+  # `terraform providers schema -json`. The full E2E suite already ran against
+  # these commits in test.yml; this smoke keeps releases green without needing
+  # the fork's live target system.
+  smoke:
+    name: Install Smoke (${{ matrix.platform }})
+    needs: [version, package]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows_amd64
+          - os: ubuntu-latest
+            platform: linux_amd64
+          - os: macos-latest
+            platform: darwin_arm64
+    runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dist
+          path: dist/
+      - name: Install smoke test (init from mirror + providers schema)
+        shell: pwsh
+        run: |
+          $ver = $env:RELEASE_VERSION
+          $settings = Get-Content provider/settings.tfps.json -Raw | ConvertFrom-Json
+          $name = $settings.name
+          $address = $settings.address           # registry.terraform.io/<ns>/<name>
+          $zip = "dist/terraform-provider-${name}_${ver}_${{ matrix.platform }}.zip"
+          if (-not (Test-Path $zip)) {
+            throw "Missing $zip - dist contains: $((Get-ChildItem dist).Name -join ', ')"
+          }
+
+          $mirror = Join-Path $pwd "mirror/$address"
+          New-Item -ItemType Directory -Force -Path $mirror | Out-Null
+          Copy-Item $zip $mirror
+
+          New-Item -ItemType Directory -Force -Path smoke | Out-Null
+          @"
+          terraform {
+            required_providers {
+              $name = {
+                source  = "$address"
+                version = "$ver"
+              }
+            }
+          }
+          "@ | Set-Content smoke/main.tf
+
+          $mirrorRoot = (Join-Path $pwd 'mirror') -replace '\\', '/'
+          @"
+          provider_installation {
+            filesystem_mirror {
+              path    = "$mirrorRoot"
+              include = ["$address"]
+            }
+          }
+          "@ | Set-Content smoke/mirror.tfrc
+
+          $env:TF_CLI_CONFIG_FILE = Join-Path $pwd 'smoke/mirror.tfrc'
+          Push-Location smoke
+          terraform init -input=false
+          if ($LASTEXITCODE -ne 0) { throw "terraform init from mirror failed" }
+
+          # The provider must serve its schemas: this loads the binary (and
+          # proves the embedded definitions parse) without touching any target
+          # system.
+          $schemas = terraform providers schema -json | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "terraform providers schema failed" }
+          $key = $schemas.provider_schemas.PSObject.Properties.Name |
+            Where-Object { $_ -like "*/$name" }
+          if (-not $key) {
+            throw "providers schema has no entry for $address - got: $($schemas.provider_schemas.PSObject.Properties.Name -join ', ')"
+          }
+          $resourceCount = ($schemas.provider_schemas.$key.resource_schemas.PSObject.Properties | Measure-Object).Count
+          $dataCount = ($schemas.provider_schemas.$key.data_source_schemas.PSObject.Properties | Measure-Object).Count
+          Write-Host "provider serves $resourceCount resource schema(s), $dataCount data source schema(s)"
+
+  publish:
+    name: Tag and Publish Release
+    needs: [version, smoke]
+    # Never publish from the template repo itself - same self-exclusion as
+    # template-sync.yml. The jobs above still run there (dogfooding: a broken
+    # release pipeline fails on the template, not in every fork), but tagging
+    # would stamp v* tags and upload `terraform-provider-yourprovider` zips -
+    # the placeholder name from provider/settings.tfps.json - onto the
+    # template's releases page, which is the first thing anyone evaluating the
+    # template looks at. In your fork this condition is true and publish runs.
+    if: github.repository != 'MarkDomansky/TEMPLATE-terraform-provider-YOURPROVIDER'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # semantic-release needs the full history to reach the last tag.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dist
+          path: dist/
+      - name: Stage registry manifest
+        run: |
+          NAME=$(jq -r .name provider/settings.tfps.json)
+          cp .template/release/terraform-registry-manifest.json \
+             "dist/terraform-provider-${NAME}_${{ needs.version.outputs.version }}_manifest.json"
+      # Same analysis as the `version` job on the same commit, so it lands on
+      # the same version - but this run creates the tag, generates the notes
+      # and uploads dist/* to the release on this branch's channel.
+      - name: semantic-release (tag + publish)
+        id: semantic
+        uses: cycjimmy/semantic-release-action@v4
+        with:
+          semantic_version: 24
+          # Keep in sync with the version job.
+          extra_plugins: |
+            conventional-changelog-conventionalcommits@8
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify published version matches the tested artifacts
+        run: |
+          EXPECTED="${{ needs.version.outputs.version }}"
+          ACTUAL="${{ steps.semantic.outputs.new_release_version }}"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Published v$ACTUAL but the smoke test verified v$EXPECTED."
+            exit 1
+          fi
+          echo "::notice::Published v$ACTUAL"
