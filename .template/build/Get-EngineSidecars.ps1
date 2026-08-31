@@ -47,16 +47,22 @@ function Get-CurrentPlatformPair {
     , @($os, $arch)
 }
 
-$platforms = if ($CurrentPlatform) {
-    , (Get-CurrentPlatformPair)
-}
-else {
-    @(
+# The outer @() is load-bearing. Assigning the value of an if statement
+# collects its output stream, which unrolls one level of array - so a single
+# pair comes back as the two loose strings 'linux','amd64' and the loop below
+# then reads $os='linux', $arch=$null. Wrapping INSIDE the branch does not
+# help; the if statement unrolls whatever the branch emits. Only six-platform
+# runs survived that, which is why release packaging never hit it.
+$platforms = @(
+    if ($CurrentPlatform) {
+        , (Get-CurrentPlatformPair)
+    }
+    else {
         @('windows', 'amd64'), @('windows', 'arm64'),
         @('linux', 'amd64'), @('linux', 'arm64'),
         @('darwin', 'amd64'), @('darwin', 'arm64')
-    )
-}
+    }
+)
 
 if (-not [System.IO.Path]::IsPathRooted($Destination)) {
     $Destination = Join-Path $repoRoot $Destination
@@ -64,6 +70,11 @@ if (-not [System.IO.Path]::IsPathRooted($Destination)) {
 
 foreach ($pair in $platforms) {
     $os, $arch = $pair
+    if (-not $os -or -not $arch) {
+        # Fail here rather than requesting ..._linux_.zip and reporting a 404,
+        # which reads like a missing engine release instead of a bad pair.
+        throw "Malformed platform entry '$($pair -join ',')' - expected an (os, arch) pair."
+    }
     $binary = if ($os -eq 'windows') { 'pshost.exe' } else { 'pshost' }
     $zipName = "terraform-provider-powershell_${Version}_${os}_${arch}.zip"
     $url = "https://github.com/$engineRepo/releases/download/v$Version/$zipName"
