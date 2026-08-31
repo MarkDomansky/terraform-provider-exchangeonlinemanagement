@@ -1,12 +1,22 @@
-# Provider shutdown script (optional - delete this file if you don't need one).
+# Provider shutdown script. Runs once on teardown, AFTER the practitioner's
+# shutdown_script - the mirror of startup.ps1's ordering.
 #
-# Runs once when the provider tears down, after every resource operation and
-# after the practitioner's shutdown_script. Disconnect/clean up here, e.g.:
+# CONTRACT: no param block (see startup.ps1).
 #
-#   Disconnect-ExchangeOnline -Confirm:$false
-#
-# Like startup.ps1, this runs flat at the runspace scope: do NOT declare a
-# param block (the engine prepends its own), and read $global:ProviderData or
-# your own globals instead.
+# Teardown is best-effort. Anything on the error stream fails the operation, so
+# a failed disconnect must not be allowed to fail an otherwise successful
+# terraform run - hence the deliberately empty catch.
 
-$global:YourProviderState = $null
+try {
+    if (Get-Command -Name 'Disconnect-ExchangeOnline' -ErrorAction Ignore) {
+        # -Confirm:$false is mandatory. Disconnect-ExchangeOnline has a high
+        # ConfirmImpact, and a confirmation prompt in the sidecar's
+        # non-interactive host blocks until the operation times out.
+        Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+    }
+}
+catch {
+    # Intentionally swallowed: see above.
+}
+
+$global:EXOProviderState = $null

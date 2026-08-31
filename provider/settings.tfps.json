@@ -1,7 +1,6 @@
 {
-  "$schema": "https://json.schemastore.org/tfpowershell-settings.json",
-  "name": "yourprovider",
-  "address": "registry.terraform.io/yournamespace/yourprovider",
-  "repository": "https://github.com/yourname/terraform-provider-yourprovider",
-  "engine_version": "latest"
+  "name": "exchangeonlinemanagement",
+  "address": "registry.terraform.io/markdomansky/exchangeonlinemanagement",
+  "repository": "https://github.com/markdomansky/terraform-provider-exchangeonlinemanagement",
+  "engine_version": "0.1.0-beta.5"
 }

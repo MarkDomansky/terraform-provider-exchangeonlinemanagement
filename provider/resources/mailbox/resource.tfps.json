@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json.schemastore.org/tfpowershell-resource.json",
+  "version": 1,
+  "description": "Manages an Exchange Online mailbox (New-Mailbox / Get-Mailbox / Set-Mailbox / Remove-Mailbox). Best suited to shared, room and equipment mailboxes; user mailboxes are normally provisioned by licensing a user in Entra ID.",
+  "timeout_seconds": 300,
+  "attributes": {
+    "name": {
+      "type": "string",
+      "required": true,
+      "description": "The mailbox name (New-Mailbox -Name). Changing it renames the mailbox in place via Set-Mailbox -Name; it does not recreate it, because the resource is keyed on the mailbox GUID."
+    },
+    "type": {
+      "type": "string",
+      "optional": true,
+      "default": "shared",
+      "validators": [
+        { "one_of": ["shared", "room", "equipment", "user"] }
+      ],
+      "description": "Mailbox type. shared/room/equipment map to the New-Mailbox -Shared/-Room/-Equipment switches. 'user' additionally requires user_principal_name and password, and is rarely the right choice in Exchange Online - license a user in Entra ID instead. Changing this converts the mailbox in place via Set-Mailbox -Type."
+    },
+    "user_principal_name": {
+      "type": "string",
+      "optional": true,
+      "description": "UPN for a type = \"user\" mailbox (New-Mailbox -MicrosoftOnlineServicesID). Create-only: the UPN of an existing mailbox is owned by Entra ID, so update.ps1 refuses a change rather than silently ignoring it."
+    },
+    "password": {
+      "type": "string",
+      "optional": true,
+      "sensitive": true,
+      "description": "Initial password for a type = \"user\" mailbox (New-Mailbox -Password). Used only at creation and never read back or reconciled; changing it has no effect."
+    },
+    "alias": {
+      "type": "string",
+      "optional": true,
+      "description": "Mail alias (the part of the address before @). Exchange derives one when this is unset; read it back from effective_alias."
+    },
+    "display_name": {
+      "type": "string",
+      "optional": true,
+      "description": "Display name shown in address lists. Defaults to name when unset; read it back from effective_display_name."
+    },
+    "primary_smtp_address": {
+      "type": "string",
+      "optional": true,
+      "description": "The mailbox's primary SMTP address, applied after creation via Set-Mailbox -WindowsEmailAddress. Leave unset to let Exchange derive it from the alias and the tenant's accepted domains, then read it back from effective_primary_smtp_address."
+    },
+    "email_addresses": {
+      "type": "set",
+      "element_type": "string",
+      "optional": true,
+      "description": "The complete proxy-address list (Set-Mailbox -EmailAddresses), e.g. [\"SMTP:sales@contoso.com\", \"smtp:sales@contoso.onmicrosoft.com\"]. Uppercase SMTP: marks the primary address. This is authoritative: setting it replaces every existing address, so include the ones Exchange added itself. Leave it unset to manage addresses outside Terraform."
+    },
+    "hidden_from_address_lists": {
+      "type": "bool",
+      "optional": true,
+      "description": "Hide the mailbox from address lists (Set-Mailbox -HiddenFromAddressListsEnabled)."
+    },
+    "custom_attributes": {
+      "type": "map",
+      "element_type": "string",
+      "optional": true,
+      "description": "Exchange custom attributes, keyed \"1\" through \"15\": { \"1\" = \"finance\" } sets Set-Mailbox -CustomAttribute1. Any other key is an error."
+    },
+    "litigation_hold_enabled": {
+      "type": "bool",
+      "optional": true,
+      "description": "Place the mailbox on litigation hold (Set-Mailbox -LitigationHoldEnabled). Requires the appropriate licence in the tenant."
+    },
+    "litigation_hold_duration_days": {
+      "type": "int",
+      "optional": true,
+      "description": "How long litigation hold retains items, in days (Set-Mailbox -LitigationHoldDuration)."
+    },
+    "retention_policy": {
+      "type": "string",
+      "optional": true,
+      "description": "Name of the retention policy to apply (Set-Mailbox -RetentionPolicy). The policy must already exist in the tenant."
+    },
+    "issue_warning_quota": {
+      "type": "string",
+      "optional": true,
+      "description": "Quota at which the user is warned, as an Exchange size string, e.g. \"49 GB\" (Set-Mailbox -IssueWarningQuota)."
+    },
+    "prohibit_send_quota": {
+      "type": "string",
+      "optional": true,
+      "description": "Quota at which the mailbox can no longer send, e.g. \"49.5 GB\" (Set-Mailbox -ProhibitSendQuota)."
+    },
+    "prohibit_send_receive_quota": {
+      "type": "string",
+      "optional": true,
+      "description": "Quota at which the mailbox can no longer send or receive, e.g. \"50 GB\" (Set-Mailbox -ProhibitSendReceiveQuota)."
+    },
+    "max_send_size": {
+      "type": "string",
+      "optional": true,
+      "description": "Largest message the mailbox may send, e.g. \"35 MB\" (Set-Mailbox -MaxSendSize)."
+    },
+    "max_receive_size": {
+      "type": "string",
+      "optional": true,
+      "description": "Largest message the mailbox may receive, e.g. \"36 MB\" (Set-Mailbox -MaxReceiveSize)."
+    },
+    "grant_send_on_behalf_to": {
+      "type": "set",
+      "element_type": "string",
+      "optional": true,
+      "description": "Recipients allowed to send on behalf of this mailbox (Set-Mailbox -GrantSendOnBehalfTo). Authoritative: the list replaces whatever is configured."
+    },
+    "forwarding_smtp_address": {
+      "type": "string",
+      "optional": true,
+      "description": "External address to forward mail to (Set-Mailbox -ForwardingSmtpAddress). Pair with deliver_to_mailbox_and_forward to keep a copy."
+    },
+    "deliver_to_mailbox_and_forward": {
+      "type": "bool",
+      "optional": true,
+      "description": "Keep a copy in the mailbox as well as forwarding (Set-Mailbox -DeliverToMailboxAndForward)."
+    },
+    "resource_capacity": {
+      "type": "int",
+      "optional": true,
+      "description": "Seating capacity of a room or equipment mailbox (Set-Mailbox -ResourceCapacity)."
+    },
+    "permanently_delete": {
+      "type": "bool",
+      "optional": true,
+      "default": false,
+      "description": "On destroy, pass Remove-Mailbox -PermanentlyDelete so the mailbox is not recoverable. Without it Exchange soft-deletes the mailbox and retains it for 30 days, which can collide with recreating a mailbox of the same name."
+    },
+    "additional_parameters": {
+      "type": "json",
+      "optional": true,
+      "description": "Escape hatch: a JSON object of extra Set-Mailbox parameters, splatted onto the cmdlet after every attribute above, e.g. jsonencode({ Office = \"HQ\", RequireSenderAuthenticationEnabled = false }). Keys are Set-Mailbox parameter names and win over anything this resource sets. Terraform cannot validate them, and values here are not reflected in any computed attribute."
+    },
+    "exchange_guid": {
+      "type": "string",
+      "computed": true,
+      "description": "The mailbox's Exchange GUID."
+    },
+    "external_directory_object_id": {
+      "type": "string",
+      "computed": true,
+      "description": "The mailbox's Entra ID object ID."
+    },
+    "effective_primary_smtp_address": {
+      "type": "string",
+      "computed": true,
+      "description": "The primary SMTP address Exchange actually resolved, whether or not primary_smtp_address was set."
+    },
+    "effective_alias": {
+      "type": "string",
+      "computed": true,
+      "description": "The alias Exchange actually resolved."
+    },
+    "effective_display_name": {
+      "type": "string",
+      "computed": true,
+      "description": "The display name Exchange actually resolved."
+    },
+    "effective_user_principal_name": {
+      "type": "string",
+      "computed": true,
+      "description": "The mailbox's current UPN as reported by Get-Mailbox."
+    },
+    "effective_email_addresses": {
+      "type": "set",
+      "element_type": "string",
+      "computed": true,
+      "description": "Every proxy address on the mailbox, including the SIP: and SPO: entries Exchange adds itself. Use this when building an authoritative email_addresses list."
+    },
+    "recipient_type_details": {
+      "type": "string",
+      "computed": true,
+      "description": "Exchange's own classification: SharedMailbox, UserMailbox, RoomMailbox or EquipmentMailbox."
+    },
+    "distinguished_name": {
+      "type": "string",
+      "computed": true,
+      "description": "The mailbox's distinguished name in the Exchange directory."
+    },
+    "is_directory_synced": {
+      "type": "bool",
+      "computed": true,
+      "description": "Whether the underlying object is synchronised from on-premises Active Directory. Synced objects cannot be fully managed from Exchange Online."
+    },
+    "when_created": {
+      "type": "string",
+      "computed": true,
+      "description": "Creation time in UTC, ISO 8601."
+    }
+  }
+}

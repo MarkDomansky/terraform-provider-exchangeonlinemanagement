@@ -1,13 +1,76 @@
 {
   "$schema": "https://json.schemastore.org/tfpowershell-provider.json",
   "version": 1,
-  "description": "Example provider built from the PowerShell provider template. Replace this description with what your provider manages.",
+  "description": "Manages Exchange Online recipients through the ExchangeOnlineManagement PowerShell module using certificate-based app-only authentication. The module must already be installed on the machine running Terraform.",
   "attributes": {
-    "default_directory": {
+    "organization": {
       "type": "string",
       "optional": true,
-      "env": "YOURPROVIDER_DEFAULT_DIRECTORY",
-      "description": "Directory used by the example_file resource when a relative path is given. Scripts read it as $global:ProviderData.Config.default_directory. Delete this attribute along with the sample resources and declare your own (tenant, api_url, client_id, ...)."
+      "env": "EXO_ORGANIZATION",
+      "description": "The tenant's primary .onmicrosoft.com domain, e.g. contoso.onmicrosoft.com. Required for app-only authentication. Declared optional because the manifest only allows an environment-variable fallback on optional attributes; startup.ps1 fails with an actionable message when it is missing."
+    },
+    "app_id": {
+      "type": "string",
+      "optional": true,
+      "env": "EXO_APP_ID",
+      "description": "Application (client) ID of the Entra app registration used for app-only authentication. See the 'Registering the Entra application' guide."
+    },
+    "auth_method": {
+      "type": "string",
+      "optional": true,
+      "env": "EXO_AUTH_METHOD",
+      "validators": [
+        { "one_of": ["certificate_thumbprint", "certificate_path"] }
+      ],
+      "description": "Explicitly selects the authentication mode. Leave unset to infer it from whichever certificate attribute is supplied; set it only to resolve an ambiguity."
+    },
+    "certificate_thumbprint": {
+      "type": "string",
+      "optional": true,
+      "env": "EXO_CERTIFICATE_THUMBPRINT",
+      "description": "Thumbprint of a certificate in the Windows certificate store (Connect-ExchangeOnline -CertificateThumbprint). WINDOWS ONLY - Microsoft documents no cross-platform equivalent. On Linux and macOS use certificate_path instead."
+    },
+    "certificate_path": {
+      "type": "string",
+      "optional": true,
+      "env": "EXO_CERTIFICATE_PATH",
+      "description": "Path to a PFX file holding the app registration's certificate and private key (Connect-ExchangeOnline -CertificateFilePath). Resolved on the machine running the provider, which is the machine running terraform. Works on every platform."
+    },
+    "certificate_password": {
+      "type": "string",
+      "optional": true,
+      "sensitive": true,
+      "env": "EXO_CERTIFICATE_PASSWORD",
+      "description": "Password protecting the PFX named by certificate_path. Converted to a SecureString before it reaches Connect-ExchangeOnline. Omit for an unprotected PFX."
+    },
+    "exchange_environment_name": {
+      "type": "string",
+      "optional": true,
+      "env": "EXO_EXCHANGE_ENVIRONMENT_NAME",
+      "validators": [
+        {
+          "one_of": [
+            "O365Default",
+            "O365GermanyCloud",
+            "O365China",
+            "O365USGovGCCHigh",
+            "O365USGovDoD"
+          ]
+        }
+      ],
+      "description": "Connect-ExchangeOnline -ExchangeEnvironmentName. Defaults to O365Default; the fallback lives in startup.ps1 rather than in this manifest because a manifest default would suppress the EXO_EXCHANGE_ENVIRONMENT_NAME fallback."
+    },
+    "module_path": {
+      "type": "string",
+      "optional": true,
+      "env": "EXO_MODULE_PATH",
+      "description": "Directory prepended to PSModulePath before ExchangeOnlineManagement is imported. The provider hosts PowerShell in-process rather than launching pwsh, so it inherits whatever PSModulePath the terraform process has; set this when the module lives somewhere that path does not cover."
+    },
+    "command_names": {
+      "type": "list",
+      "element_type": "string",
+      "optional": true,
+      "description": "Connect-ExchangeOnline -CommandName: the subset of Exchange cmdlets to import. Restricting it measurably speeds up provider startup, which runs on every plan, apply, refresh and destroy. Leave unset to import the full cmdlet set. This provider needs at least Get-Mailbox, New-Mailbox, Set-Mailbox, Remove-Mailbox, Get-CASMailbox and Set-CASMailbox."
     }
   }
 }
