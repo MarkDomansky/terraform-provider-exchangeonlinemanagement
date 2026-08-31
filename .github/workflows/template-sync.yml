@@ -93,28 +93,53 @@ jobs:
           # a PUSH of workflow files needs the PAT.
           $inc = $checkOnly -or ($env:HAS_PAT -eq 'true')
 
-          # Template commits since the last merged sync, recovered from the
-          # @sha marker that every sync squash subject carries.
+          # Baseline for "what template commits is this repo missing?".
+          # Second sync onward: the @sha marker every sync squash subject
+          # carries. First sync (or a marker whose commit no longer exists):
+          # this repo's creation time - a "Use this template" copy starts life
+          # holding the template state of that moment, so everything committed
+          # to the template since then is what it is missing.
+          # --no-merges + %B, deliberately: a sync PR closed with a merge
+          # commit puts the marker in the MERGE commit's body, and its subject
+          # is only "Merge pull request #N from ...". Matching %s of the newest
+          # grep hit would then find no @sha and mis-report every later sync as
+          # the first one.
           $prevSha = $null
-          $marker = [string](git log --grep 'sync managed files from template @' -1 --format=%s)
-          if ($marker -match '@([0-9a-f]{7,40})') { $prevSha = $Matches[1] }
-          $history = "_(first sync - no previous sync marker found on ``$target``)_"
+          $marker = [string](git log --no-merges --grep 'sync managed files from template @' -1 --format=%B)
+          if ($marker -match '@([0-9a-f]{7,40})') {
+            $sha = $Matches[1]
+            git -C ../template cat-file -e "$sha^{commit}" 2>$null
+            if ($LASTEXITCODE -eq 0) { $prevSha = $sha }
+            else { Write-Host "::warning::Previous sync marker $sha is not in template history (force-push or rewrite?) - falling back to this repo's creation date." }
+          }
+
+          $note = ''
+          $logArgs   = @('--no-merges', '--format=- %s (%h)')
+          $countArgs = @('--count', '--no-merges')
           if ($prevSha) {
-            git -C ../template cat-file -e "$prevSha^{commit}" 2>$null
-            if ($LASTEXITCODE -eq 0) {
-              $count = [int](git -C ../template rev-list --count --no-merges "$prevSha..HEAD")
-              if ($count -eq 0) {
-                $history = '_(no new template commits - this sync restores locally drifted managed files)_'
-              }
-              else {
-                $subjects = @(git -C ../template log --no-merges --format='- %s (%h)' "$prevSha..HEAD" | Select-Object -First 50)
-                $history = $subjects -join "`n"
-                if ($count -gt 50) { $history += "`n- ...and $($count - 50) more" }
-              }
-            }
-            else {
-              $history = "_(previous sync marker ``$prevSha`` not found in template history)_"
-            }
+            $logArgs   += "$prevSha..HEAD"
+            $countArgs += "$prevSha..HEAD"
+            $emptyNote  = '_(no new template commits - this sync restores locally drifted managed files)_'
+          }
+          else {
+            # createdAt is exact for template copies; the first commit on the
+            # branch covers repos where gh cannot answer.
+            $since = [string](gh repo view --json createdAt --jq .createdAt 2>$null)
+            if (-not $since) { $since = [string](git log --reverse --format=%cI $target | Select-Object -First 1) }
+            $logArgs   += @('--since', $since, 'HEAD')
+            $countArgs += @('--since', $since, 'HEAD')
+            $note       = "_(no sync marker on ``$target`` yet - listing template commits since this repo was created, ``$since``)_`n`n"
+            $emptyNote  = "_(no template commits since this repo was created (``$since``) - this sync restores locally drifted managed files)_"
+          }
+
+          $count = [int](git -C ../template rev-list @countArgs)
+          if ($count -eq 0) {
+            $history = $emptyNote
+          }
+          else {
+            $subjects = @(git -C ../template log @logArgs | Select-Object -First 50)
+            $history = $note + ($subjects -join "`n")
+            if ($count -gt 50) { $history += "`n- ...and $($count - 50) more" }
           }
 
           if (-not $checkOnly) { git switch -c template-sync }

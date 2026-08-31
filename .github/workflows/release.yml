@@ -109,6 +109,19 @@ jobs:
       - name: Download pshost sidecars from the engine release
         shell: pwsh
         run: ./.template/build/Get-EngineSidecars.ps1
+      # GoReleaser runs with `--skip=validate` below, which turns off its
+      # clean-tree check - so this narrows that exemption back down to the two
+      # files the engine bump is allowed to touch. Anything else appearing in
+      # the tree (a generated file, a stray .env) would otherwise be compiled
+      # into the released binary with nothing to flag it.
+      - name: Assert only the engine bump dirtied the tree
+        run: |
+          UNEXPECTED=$(git status --porcelain | grep -vE ' (go\.mod|go\.sum)$' || true)
+          if [ -n "$UNEXPECTED" ]; then
+            echo "::error::Unexpected changes in the working tree before packaging:"
+            echo "$UNEXPECTED"
+            exit 1
+          fi
       # GoReleaser derives {{ .Version }} from the current tag. The real tag is
       # not created until the smoke test is green, so stamp a local-only tag
       # with the version semantic-release just computed. It is never pushed.
@@ -117,6 +130,15 @@ jobs:
       # Sign checksums only when the GPG secrets are configured; a GitHub-only
       # release does not require signatures (the Terraform Registry DOES - see
       # SETUP.md), so their absence must not block CI.
+      #
+      # `validate` is always skipped: Update-Engine.ps1 above resolves the
+      # engine version INTO go.mod (and writes go.sum, which this repo does not
+      # track) on every run, so the tree is deliberately dirty by the time
+      # GoReleaser starts and its git-state check would abort with "git is in a
+      # dirty state". The step above keeps that exemption narrow. Skipping
+      # validate also drops its tag check, which this pipeline does not want
+      # either - the real tag is only created after the smoke test, and the
+      # version comes from GORELEASER_CURRENT_TAG below.
       - name: Check for GPG signing key
         id: gpg_check
         env:
@@ -124,10 +146,10 @@ jobs:
         run: |
           if [ -n "$GPG_PRIVATE_KEY" ]; then
             echo "have_key=true" >> "$GITHUB_OUTPUT"
-            echo "skips=publish,announce" >> "$GITHUB_OUTPUT"
+            echo "skips=publish,announce,validate" >> "$GITHUB_OUTPUT"
           else
             echo "have_key=false" >> "$GITHUB_OUTPUT"
-            echo "skips=publish,announce,sign" >> "$GITHUB_OUTPUT"
+            echo "skips=publish,announce,validate,sign" >> "$GITHUB_OUTPUT"
             echo "::notice::GPG_PRIVATE_KEY secret not set - checksums will not be signed."
           fi
       - name: Import GPG key
@@ -158,6 +180,11 @@ jobs:
             dist/*.zip
             dist/*_SHA256SUMS
             dist/*_SHA256SUMS.sig
+          # Consumed by `smoke` and `publish` in this same run; the week is a
+          # debug window - re-running `publish` or pulling the exact zips the
+          # smoke test verified after a bad release. The published release
+          # keeps them permanently, so nothing is lost when this expires.
+          # Capped by the repo's Actions retention setting (see SETUP.md).
           retention-days: 7
 
   # Prove each zip is installable and serves the typed schemas: a real
